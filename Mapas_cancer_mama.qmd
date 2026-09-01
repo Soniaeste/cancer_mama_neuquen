@@ -4,6 +4,8 @@ subtitle: "Visualización por Área Programática, 2010–2017"
 format:
   html:
     toc: true
+    embed-resources: true
+output-file: index.html
 execute-dir: project
 ---
 
