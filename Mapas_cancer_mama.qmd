@@ -1,0 +1,292 @@
+---
+title: "Mortalidad por cáncer de mama en Neuquén"
+subtitle: "Visualización por Área Programática, 2010–2017"
+format:
+  html:
+    toc: true
+execute-dir: project
+---
+
+## **Construcción del mapa interactivo**
+
+Una vez preparada la información espacial y definida una clasificación común de la TME, comenzamos la construcción del mapa interactivo. Dado que los objetos generados con `leaflet` requieren un entorno HTML, se decidió crear un documento Quarto independiente para la visualización, manteniendo en esta bitácora el registro de las decisiones metodológicas y los pasos realizados.
+
+El mapa utilizará OpenStreetMap como cartografía base. Inicialmente se trabajará con el año 2010 para verificar la correcta representación de los polígonos, la escala de TME y la información asociada a cada Área Programática. Posteriormente se extenderá la visualización al período 2010–2017.
+
+```{r}
+library(sf)
+library(dplyr)
+library(leaflet)
+
+ap_tiempo <- st_read(
+  "datos/procesados/ap_tiempo_mapa.gpkg",
+  layer = "ap_tiempo",
+  quiet = TRUE
+)
+```
+
+control:
+
+```{r}
+nrow(ap_tiempo)
+sort(unique(ap_tiempo$Año))
+n_distinct(ap_tiempo$AP)
+```
+
+Como `clase_tme` se guardó como texto, en este documento volvemos a indicarle su orden:
+
+```{r}
+ap_tiempo <- ap_tiempo |>
+  mutate(
+    clase_tme = factor(
+      clase_tme,
+      levels = c(
+        "0",
+        "> 0 a 1.80",
+        "> 1.80 a 2.67",
+        "> 2.67 a 3.93",
+        "> 3.93 a 7.01",
+        "> 7.01"
+      )
+    )
+  )
+```
+
+control:
+
+```{r}
+table(ap_tiempo$clase_tme, useNA = "ifany")
+```
+
+###Mapa 2010
+
+```{r}
+mapa_2010 <- ap_tiempo |>
+  filter(Año == 2010) |>
+  st_transform(4326)
+
+nrow(mapa_2010)
+```
+
+###definir la misma escala para todo el período:
+
+```{r}
+pal_tme <- colorFactor(
+  palette = "YlOrRd",
+  domain = levels(ap_tiempo$clase_tme),
+  ordered = TRUE
+)
+```
+
+###Primer mapa con Open Street View
+
+```{r}
+leaflet(mapa_2010) |>
+  addTiles() |>
+  addPolygons(
+    fillColor = ~pal_tme(clase_tme),
+    fillOpacity = 0.7,
+    color = "black",
+    weight = 1,
+    
+    label = ~paste0(
+      AP,
+      " | TME: ",
+      round(TME, 2)
+    ),
+    
+    popup = ~paste0(
+      "<b>Área Programática:</b> ", AP, "<br>",
+      "<b>Zona Sanitaria:</b> ", ZS, "<br>",
+      "<b>Año:</b> ", Año, "<br>",
+      "<b>TME:</b> ", round(TME, 3), "<br>",
+      "<b>Clase de TME:</b> ", clase_tme
+    ),
+    
+    highlightOptions = highlightOptions(
+      weight = 3,
+      bringToFront = TRUE
+    )
+  ) |>
+  addLegend(
+    position = "bottomright",
+    colors = pal_tme(levels(ap_tiempo$clase_tme)),
+    labels = levels(ap_tiempo$clase_tme),
+    title = "TME"
+  )
+```
+
+### Preparacion de la capa completa x año
+
+```{r}
+ap_mapa <- ap_tiempo |>
+  st_transform(4326)
+```
+
+####Fijamos los colores
+
+```{r}
+colores_tme <- c(
+  "#d9d9d9",  # 0
+  "#ffffb2",
+  "#fed976",
+  "#feb24c",
+  "#fd8d3c",
+  "#e31a1c"
+)
+
+pal_tme <- colorFactor(
+  palette = colores_tme,
+  domain = levels(ap_tiempo$clase_tme),
+  ordered = TRUE
+)
+```
+
+**Escala: gris = TME 0** y luego colores cada vez más intensos = TME creciente.
+
+####Mapa de los ocho años
+
+```{r}
+mapa_temporal <- leaflet(ap_mapa) |>
+  addTiles()
+```
+
+####poligonos
+
+```{r}
+for (anio in 2010:2017) {
+  
+  datos_anio <- ap_mapa |>
+    filter(Año == anio)
+  
+  mapa_temporal <- mapa_temporal |>
+    addPolygons(
+      data = datos_anio,
+      group = as.character(anio),
+      
+      fillColor = ~pal_tme(clase_tme),
+      fillOpacity = 0.7,
+      color = "black",
+      weight = 1,
+      
+      label = ~paste0(
+        AP,
+        " | TME: ",
+        round(TME, 2)
+      ),
+      
+      popup = ~paste0(
+        "<b>Área Programática:</b> ", AP, "<br>",
+        "<b>Zona Sanitaria:</b> ", ZS, "<br>",
+        "<b>Año:</b> ", Año, "<br>",
+        "<b>TME:</b> ", round(TME, 3), "<br>",
+        "<b>Clase de TME:</b> ", clase_tme
+      ),
+      
+      highlightOptions = highlightOptions(
+        weight = 3,
+        bringToFront = TRUE
+      )
+    )
+}
+```
+
+```{r}
+group = as.character(anio)
+```
+
+####Selector de años
+
+```{r}
+mapa_temporal <- mapa_temporal |>
+  addLayersControl(
+    baseGroups = as.character(2010:2017),
+    options = layersControlOptions(
+      collapsed = FALSE
+    )
+  )
+```
+
+#### Dejamos visible el 2010 como mapa inicial
+
+```{r}
+mapa_temporal <- mapa_temporal |>
+  hideGroup(as.character(2011:2017))
+```
+
+###leyenda
+
+```{r}
+mapa_temporal <- mapa_temporal |>
+  addLegend(
+    position = "bottomright",
+    colors = colores_tme,
+    labels = levels(ap_tiempo$clase_tme),
+    title = "TME por 100.000 mujeres",
+    opacity = 0.8
+  )
+
+mapa_temporal
+```
+
+## Distribución anual de las Áreas Programáticas según la escala de TME
+
+Para complementar la lectura del mapa interactivo, resumimos cuántas Áreas Programáticas se ubican en cada una de las categorías de TME utilizadas en la representación cartográfica.
+
+De este modo, la interpretación no se basa solamente en la observación visual de los colores, sino también en la distribución anual de las 28 Áreas Programáticas entre las distintas clases.
+
+```{r}
+library(tidyr)
+
+tabla_clases_anio <- ap_tiempo |>
+  st_drop_geometry() |>
+  count(Año, clase_tme) |>
+  group_by(Año) |>
+  mutate(
+    porcentaje = round(100 * n / sum(n), 1)
+  ) |>
+  ungroup()
+
+tabla_clases_anio
+```
+
+Para facilitar la comparación entre años, reorganizamos la información de modo que cada columna corresponda a una de las clases utilizadas en la leyenda del mapa.
+
+```{r}
+tabla_mapa <- tabla_clases_anio |>
+  mutate(
+    valor = paste0(n, " (", porcentaje, "%)")
+  ) |>
+  select(Año, clase_tme, valor) |>
+  pivot_wider(
+    names_from = clase_tme,
+    values_from = valor,
+    values_fill = "0 (0%)"
+  )
+
+tabla_mapa
+
+```
+
+## Lectura temporal del mapa
+
+La tabla anterior permite interpretar los cambios observados en el mapa a partir de la cantidad de Áreas Programáticas que se ubican en cada categoría de TME en cada año.
+
+En particular, interesa observar:
+
+- la cantidad de AP con TME igual a 0;
+- la distribución de las AP entre las categorías positivas;
+- la aparición de AP en las categorías superiores de la escala;
+- los cambios en la extensión territorial de los valores positivos entre un año y otro.
+
+¿Qué Áreas Programáticas presentan, en cada año, los valores pertenecientes a la categoría superior de la escala?
+
+```{r}
+tabla_categoria_alta <- ap_tiempo |>
+  st_drop_geometry() |>
+  filter(clase_tme == "> 7.01") |>
+  arrange(Año, desc(TME)) |>
+  select(Año, AP, ZS, TME)
+
+tabla_categoria_alta
+```

@@ -1,0 +1,1176 @@
+---
+title: "Bitácora del proyecto cáncer de mama en Neuquén"
+author: "Devitt_Rodriguez_Estevez"
+format: html
+editor: visual
+---
+
+## #Introducción
+
+En este documento haremos un registro de los pasos experimentales que vamos realizando con el Proyecto "Cáncer de Mama en Neuquén" para el Taller de Investigación de la Maestría En Estadística Aplicada UNCO, año 2026.
+
+Los datos originales corresponden a una base proporcionada por la Dra. Caro en función de su proyecto de Maestría e Investigación realizada entre los años 2010 al 2017.
+
+### #Inicios de la Investigación
+
+En este documento vamos a ir describiendo una parte de la investigación del grupo que en principio pretende obtener una base ampliada para el análisis de los datos que tenemos, que pueda contener datos georeferenciales para poder asociar la información de base con una capa geográfica y poder realizar análisis de datos exploratorio desde la perspectiva espacial.
+
+### #Obtención de Información Geoespacial oficial
+
+En primera instancia, hemos recurrido al sitio ofical IGN: <https://www.ign.gob.ar/NuestrasActividades/InformacionGeoespacial/CapasSIG>, para descargar capas de Provincia (shapefile) y filtrar Neuquén, y además la capa de Departamento (shpefile) y filtrar Nequén con QGIS.
+
+A continuación, hemos descargado del sitio IDENEU:
+
+<https://ideneu.neuquen.gov.ar/geonetwork/srv/eng/catalog.search#> los estableciemientos de Salud, porque la capa de Delimitación de zonas sanitarias disponible está actualizada desde 2016 en adelante y en nuestra base original de datos, el período a analizar es entre el 2010 y 2017, en el cual existía otra disposición de zonas santiarias.
+
+En el siguiente documento oficial: "Situación Sociodemográfica y Socioeconómica 2016" publicado en <https://www.saludnqn.gob.ar/salasituacion/archivos/publicaciones/para%20pantalla%20modulo%201.pdf> , describe (pág. 3) que para el año 2010 la organización territorial de ese momento utilizaba:
+
+La organización sanitaria de la provincia del Neuquén se estructuraba territorialmente en **Áreas Programa Hospitalarias**, que a su vez se agrupan en **Zonas Sanitarias**. Cada Área Programa constituye una unidad territorial de referencia para la población y se encuentra identificada con una localidad o conjunto de localidades de referencia. En el documento se reconocen cinco zonas sanitarias numeradas, además de una **Zona Metropolitana** que involucra a Nequén y a Plottier.
+
+### #Organización, limpieza y exploración de los datos en R y SQLite
+
+Una vez obtenidas y organizadas las capas geográficas en QGIS, continuamos el trabajo en **R**, con el propósito de integrar la información espacial con la base de datos original del proyecto y comenzar a construir un flujo de trabajo reproducible.
+
+En una primera etapa importamos a R tanto la base de datos original en formato Excel como las capas geográficas previamente preparadas en QGIS y almacenadas en un archivo GeoPackage. A partir de allí realizamos controles iniciales sobre la estructura de las bases, los nombres y tipos de las variables, la cantidad de registros, los años disponibles, las Áreas Programáticas y las Zonas Sanitarias.
+
+Posteriormente trabajamos en la **normalización de los nombres de las Áreas Programáticas**, dado que la denominación utilizada en la base estadística no coincidía en todos los casos con la presente en la información geográfica de los establecimientos de salud. Esta etapa resultó necesaria para poder establecer posteriormente relaciones entre ambas fuentes de información.
+
+### ####Carga de paquetes e importación de los datos
+
+Se utilizaron los paquetes \`sf\` para trabajar con información espacial, \`dplyr\` para la manipulación de datos y \`readxl\` para importar la base original almacenada en Excel.
+
+```{r}
+# ------------------------------------------------------------
+# 1. Paquetes
+# ------------------------------------------------------------
+
+library(sf)
+library(dplyr)
+library(readxl)
+
+archivo_excel <- "datos/originales/BASE 1.xlsx"
+archivo_gpkg  <- "datos/originales/cancer_neuquen.gpkg"
+
+# ------------------------------------------------------------
+# 2. Capas disponibles en el GeoPackage
+# ------------------------------------------------------------
+
+capas <- st_layers(archivo_gpkg)
+
+capas
+
+
+# ---------------------------------------------------
+# 3. Importación de las capas espaciales
+# ---------------------------------------------------
+
+establecimientos_salud <- st_read(
+  archivo_gpkg,
+  layer = "establecimientos_salud",
+  quiet = TRUE
+)
+
+neuquen_departamentos <- st_read(
+  archivo_gpkg,
+  layer = "neuquen_departamentos",
+  quiet = TRUE
+)
+
+neuquen_provincia <- st_read(
+  archivo_gpkg,
+  layer = "neuquen_provincia",
+  quiet = TRUE
+)
+
+
+# ---------------------------------------------------
+# 4. Hojas disponibles en la base Excel
+# ---------------------------------------------------
+
+hojas_excel <- excel_sheets(archivo_excel)
+
+hojas_excel
+
+# ---------------------------------------------------
+# 5. Importación de la base tabular
+# ---------------------------------------------------
+
+base_original <- read_excel(
+  archivo_excel,
+  sheet = "BASE"
+)
+
+referencia_original <- read_excel(
+  archivo_excel,
+  sheet = "REFERENCIA",
+  col_names = FALSE
+)
+
+names(referencia_original) <- c(
+  "variable",
+  "descripcion"
+)
+
+# ---------------------------------------------------
+# 6. Controles iniciales de la base
+# ---------------------------------------------------
+
+dim(base_original)
+names(base_original)
+
+dim(referencia_original)
+names(referencia_original)
+
+head(base_original)
+
+head(referencia_original)
+
+glimpse(base_original)
+
+glimpse(referencia_original)
+
+
+```
+
+####Diagnóstico y Limpieza por área programática
+
+A continuación, realizamos una primera exploración de la base original con el objetivo de verificar la organización temporal de los datos, las Zonas Sanitarias y Áreas Programáticas presentes, la existencia de valores faltantes o duplicados y considerar la totalidad de observaciones.
+
+```{r}
+# ------------------------------------------------------------
+# 1. Estructura temporal
+# ------------------------------------------------------------
+
+sort(unique(base_original$Año))
+
+base_original |>
+  count(Año)
+
+
+# ------------------------------------------------------------
+# 2. Zonas sanitarias
+# ------------------------------------------------------------
+
+sort(unique(base_original$ZS))
+
+base_original |>
+  count(ZS)
+
+
+# ------------------------------------------------------------
+# 3. Áreas Programáticas
+# ------------------------------------------------------------
+
+sort(unique(base_original$AP))
+
+n_distinct(base_original$AP)
+
+base_original |>
+  count(AP) |>
+  arrange(AP)
+
+
+# ------------------------------------------------------------
+# 4. Relación entre ZS y AP
+# ------------------------------------------------------------
+
+base_original |>
+  distinct(ZS, AP) |>
+  arrange(ZS, AP)
+
+
+# ------------------------------------------------------------
+# 5. Efectores
+# ------------------------------------------------------------
+
+n_distinct(base_original$id_efector)
+
+base_original |>
+  distinct(id_efector, ZS, AP) |>
+  arrange(id_efector)
+
+
+# ------------------------------------------------------------
+# 6. Valores faltantes
+# ------------------------------------------------------------
+
+colSums(is.na(base_original))
+
+
+# ------------------------------------------------------------
+# 7. Duplicados AP-año
+# ------------------------------------------------------------
+
+base_original |>
+  count(AP, Año) |>
+  filter(n > 1)
+
+
+# ------------------------------------------------------------
+# 8. Completitud temporal de cada AP
+# ------------------------------------------------------------
+
+base_original |>
+  count(AP) |>
+  arrange(n, AP)
+
+
+
+```
+
+#### ####Preparación de la Base y vinculación con la Información espacial
+
+El objetivo en esta etapa es preparar una base que vincule los datos georeferenciales con la base de datos originales.
+
+Para ello, generamos una "base limpia", conservando la base original. Utilizamos "mutate" para para convertir las variables en enteros cuando era necesario.
+
+Al inspeccionar los nombres de las Áreas Programáticas se encontraron algunas diferencias de escritura, principalmente relacionadas con el uso de mayúsculas y tildes.
+
+Para unificar estas denominaciones se utilizó `case_when()` dentro de `mutate()`, conservando los nombres de las Áreas que no requerían modificación.
+
+```{r}
+base_limpia <- base_original |>
+  mutate(
+    ID = as.integer(ID),
+    id_efector = as.integer(id_efector),
+    Año = as.integer(Año)
+  )
+
+
+
+base_limpia <- base_limpia |>
+  mutate(
+    AP = case_when(
+      AP == "El Chocon" ~ "El Chocón",
+      AP == "El Huecu" ~ "El Huecú",
+      AP == "Junin de los Andes" ~ "Junín de los Andes",
+      AP == "las Ovejas" ~ "Las Ovejas",
+      AP == "Loncopue" ~ "Loncopué",
+      AP == "Neuquen" ~ "Neuquén",
+      AP == "Picun Leufú" ~ "Picún Leufú",
+      AP == "Piedra del Aguila" ~ "Piedra del Águila",
+      AP == "Rincon de los Sauces" ~ "Rincón de los Sauces",
+      TRUE ~ AP
+    )
+  )
+
+
+
+```
+
+#### ####Tabla de atributos de los establecimientos de Salud
+
+Al traer la capa espacial de QGIS a R, generamos una capa espacial que denominamos establecimientos_salud del tipo sf (este tipo de archivo contiene su descripción y su geometría). A partir de esta capa generamos la tabla de atributos, para examinar su información tabluarmente:
+
+```{r}
+
+
+establecimientos_tabla <- establecimientos_salud |>
+  st_drop_geometry() |>
+  as_tibble()
+
+
+```
+
+#### ####Tabla de equivalencia entre ambas fuentes
+
+La normalización realizada anteriormente resolvía diferencias de escritura dentro de la base estadística. Sin embargo, todavía existía otro problema: **las denominaciones utilizadas para las Áreas Programáticas en la base estadística no coincidían necesariamente con las utilizadas en la capa de establecimientos de salud.** Por ejemplo: Una misma AP podía aparecer como Bajada del Agrio en la base estadística y como B DEL AGRIO en la capa espacial.
+
+Para ello armamos la siguiente tabla:
+
+```{r}
+equivalencias_ap <- tibble(
+  
+  AP = c(
+    "Aluminé",
+    "Andacollo",
+    "Añelo",
+    "Bajada del Agrio",
+    "Buta Ranquil",
+    "Centenario",
+    "Chos Malal",
+    "Cutral Co Plaza Huincul",
+    "El Chocón",
+    "El Cholar",
+    "El Huecú",
+    "Junín de los Andes",
+    "Las Coloradas",
+    "Las Lajas",
+    "Las Ovejas",
+    "Loncopué",
+    "Mariano Moreno",
+    "Neuquén",
+    "Picún Leufú",
+    "Piedra del Águila",
+    "Plottier",
+    "Rincón de los Sauces",
+    "Senillosa",
+    "SMA",
+    "SPCH",
+    "Tricao Malal",
+    "Villa La Angostura",
+    "Zapala"
+  ),
+  
+  ap_espacial = c(
+    "ALUMINE",
+    "ANDACOLLO",
+    "AÑELO",
+    "B DEL AGRIO",
+    "BUTA RANQUIL",
+    "CENTENARIO",
+    "CHOS MALAL",
+    "CUTRAL CO-P HUINCUL",
+    "CHOCON",
+    "EL CHOLAR",
+    "EL HUECU",
+    "J DE LOS ANDES",
+    "LAS COLORADAS",
+    "LAS LAJAS",
+    "LAS OVEJAS",
+    "LONCOPUE",
+    "M MORENO",
+    "CAPITAL",
+    "P LEUFU",
+    "P DEL AGUILA",
+    "PLOTTIER",
+    "R DE LOS SAUCES",
+    "SENILLOSA",
+    "SAN M DE LOS ANDES",
+    "S P DEL CH",
+    "TRICAO MALAL",
+    "V LA ANGOSTURA",
+    "ZAPALA"
+  )
+)
+
+```
+
+#### ####Unión de datos y homogeneización espacial
+
+A continuación realizamos un `left_join` para incorporar a la capa de establecimientos de salud el nombre normalizado de cada Área Programática, utilizando la tabla `equivalencias_ap` como vínculo entre ambas denominaciones. Luego contamos la cantidad de establecimientos correspondientes a cada AP, como una forma de controlar la unión realizada. Finalmente, homogeneizamos el sistema de coordenadas de las capas espaciales, tomando como referencia el CRS de la capa de establecimientos y transformando las capas de departamentos y de la provincia al mismo sistema.
+
+```{r}
+establecimientos_limpios <- establecimientos_salud |>
+  left_join(
+    equivalencias_ap,
+    by = c("ap_limpia" = "ap_espacial")
+  )
+
+
+establecimientos_por_ap <- establecimientos_limpios |>
+  st_drop_geometry() |>
+  as_tibble() |>
+  count(AP, sort = TRUE)
+
+
+crs_trabajo <- st_crs(establecimientos_limpios)
+
+neuquen_departamentos_limpios <- neuquen_departamentos |>
+  st_transform(crs_trabajo)
+
+neuquen_provincia_limpia <- neuquen_provincia |>
+  st_transform(crs_trabajo)
+
+```
+
+### ####Controles realizados antes de avanzar
+
+Para verificar que las transformaciones realizadas no hubieran alterado la estructura esperada de los datos, ejecutamos nuevamente el script de limpieza y usamos distintos controles con `stopifnot()`, de manera que la ejecución se detuviera automáticamente si alguna de las condiciones esperadas no se cumplía.
+
+Verificamos así la estructura de la base estadística: cantidad total de registros, número de Áreas Programáticas y años disponibles, período comprendido entre 2010 y 2017, ausencia de valores faltantes y de duplicados para cada combinación AP-año. También se controló que cada una de las 28 Áreas Programáticas tuviera ocho observaciones y que existiera una correspondencia consistente entre `id_efector`, Zona Sanitaria y Área Programática.
+
+A continuación controlamos la vinculación territorial realizada previamente. Se verificó que la tabla `equivalencias_ap` contuviera 28 correspondencias únicas y que los `join` no hubieran generado valores faltantes. También corroboramos que los 233 establecimientos de salud quedaran asociados a alguna de las 28 Áreas Programáticas y que las tres capas espaciales utilizaran el mismo sistema de referencia de coordenadas.
+
+Finalmente hicimos controles específicamente espaciales, para verificar la validez de las geometrías de los establecimientos, departamentos y provincia mediante `st_is_valid()`, y usamos `st_intersects()` para comprobar qué establecimientos se encontraban espacialmente dentro de los límites de la provincia de Neuquén. Al finalizar el script generamos un resumen con los principales resultados de estos controles, que arrojó:
+
+```         
+ #Base estadística: 224 registros
+ #Áreas Programáticas: 28 
+ #Años: 8
+ #Establecimientos: 233
+ #Establecimientos fuera de Neuquén: 0
+ 
+ 
+```
+
+### ####Guardar los datos procesados y vincular con SQLite
+
+Decidimos incorporar **SQLite** como una etapa complementaria del flujo de trabajo. Si bien las consultas podían realizarse directamente en R, se buscó organizar la información en una base de datos relacional y utilizar SQL para realizar consultas, agregados y controles sobre los datos procesados. De este modo, SQLite se utilizó como herramienta de gestión y consulta, mientras que R se mantuvo como entorno principal para el análisis estadístico y espacial.
+
+Dado el tamaño actual de la base, su incorporación no respondió a una necesidad de rendimiento, sino a una decisión de organización del trabajo y de integración de herramientas de bases de datos dentro del proyecto.
+
+Antes de comenzar el trabajo con SQLite, se creó un script especial para guardar los resultados obtenidos luego de la limpieza y los controles. El script ejecuta previamente el anterior de los controles y luego exporta a `datos/procesados` la base estadística limpia, la tabla de equivalencias de Áreas Programáticas y el resumen de establecimientos por AP.
+
+También se generó un nuevo GeoPackage, `cancer_neuquen_procesado.gpkg`, con las capas de establecimientos, departamentos y provincia ya normalizadas y con un sistema de coordenadas homogéneo. Finalmente, se controlaron los archivos creados en la carpeta de datos procesados.
+
+```{r}
+archivo_gpkg_procesado <-
+  "datos/procesados/cancer_neuquen_procesado.gpkg"
+
+if (file.exists(archivo_gpkg_procesado)) {
+  file.remove(archivo_gpkg_procesado)
+}
+
+st_write(
+  establecimientos_limpios,
+  archivo_gpkg_procesado,
+  layer = "establecimientos_salud",
+  quiet = TRUE
+)
+
+st_write(
+  neuquen_departamentos_limpios,
+  archivo_gpkg_procesado,
+  layer = "neuquen_departamentos",
+  append = TRUE,
+  quiet = TRUE
+)
+
+st_write(
+  neuquen_provincia_limpia,
+  archivo_gpkg_procesado,
+  layer = "neuquen_provincia",
+  append = TRUE,
+  quiet = TRUE
+)
+
+```
+
+### ####Creación de Base en SQLite y prueba de conexión
+
+En esta primera etapa cargamos los paquetes útiles para trabajar con bases de datos (`DBI` y `RSQLite`) y nuevamente realizamos los controles previos sobre los datos procesados. Luego definimos la ruta del archivo `cancer_mama_neuquen.sqlite` y creamos una nueva conexión con SQLite mediante `dbConnect()`.
+
+Antes de incorporar los establecimientos a la base eliminamos su geometría, ya que esta se mantiene almacenada en el GeoPackage. Para conservar una referencia espacial dentro de SQLite, tomamos las coordenadas de cada establecimiento y las agregamos como variables `x` e `y`.
+
+A continuación escribimos en SQLite las tablas correspondientes a la base de cáncer, referencias de variables, equivalencias de Áreas Programáticas, establecimientos de salud y cantidad de establecimientos por AP. Finalmente verificamos la creación de las tablas y realizamos algunas consultas básicas en SQL para controlar la cantidad de registros, Áreas Programáticas, período temporal y establecimientos. Una vez comprobado el funcionamiento de la conexión y la consistencia de los datos almacenados, cerramos la conexión con `dbDisconnect()`, finalizando la primera prueba.
+
+```{r}
+# ------------------------------------------------------------
+# 1. Paquetes
+# ------------------------------------------------------------
+
+library(DBI)
+library(RSQLite)
+library(sf)
+library(dplyr)
+
+
+# ------------------------------------------------------------
+# 2. Ejecutar limpieza y controles previos
+# ------------------------------------------------------------
+
+source("R/03_controles.R")
+
+
+# ------------------------------------------------------------
+# 3. Ruta de la base SQLite
+# ------------------------------------------------------------
+
+archivo_sqlite <- "datos/procesados/cancer_mama_neuquen.sqlite"
+
+
+# ------------------------------------------------------------
+# 4. Crear / reemplazar la base SQLite
+# ------------------------------------------------------------
+
+if (file.exists(archivo_sqlite)) {
+  file.remove(archivo_sqlite)
+}
+
+con <- dbConnect(
+  SQLite(),
+  archivo_sqlite
+)
+
+
+# ------------------------------------------------------------
+# 5. Preparar tabla de establecimientos
+#    La geometría se conserva aparte en el GeoPackage.
+#    Aquí incorporamos coordenadas para consultas tabulares.
+# ------------------------------------------------------------
+
+coordenadas <- st_coordinates(establecimientos_limpios)
+
+establecimientos_sql <- establecimientos_limpios |>
+  st_drop_geometry() |>
+  as_tibble() |>
+  mutate(
+    x = coordenadas[, "X"],
+    y = coordenadas[, "Y"]
+  )
+
+
+# ------------------------------------------------------------
+# 6. Escribir tablas en SQLite
+# ------------------------------------------------------------
+
+dbWriteTable(
+  con,
+  "base_cancer",
+  base_limpia,
+  overwrite = TRUE
+)
+
+dbWriteTable(
+  con,
+  "referencias",
+  referencia_original,
+  overwrite = TRUE
+)
+
+dbWriteTable(
+  con,
+  "equivalencias_ap",
+  equivalencias_ap,
+  overwrite = TRUE
+)
+
+dbWriteTable(
+  con,
+  "establecimientos",
+  establecimientos_sql,
+  overwrite = TRUE
+)
+
+dbWriteTable(
+  con,
+  "establecimientos_por_ap",
+  establecimientos_por_ap,
+  overwrite = TRUE
+)
+
+
+# ------------------------------------------------------------
+# 7. Control de tablas creadas
+# ------------------------------------------------------------
+
+dbListTables(con)
+
+
+# ------------------------------------------------------------
+# 8. Controles básicos desde SQL
+# ------------------------------------------------------------
+
+dbGetQuery(
+  con,
+  "
+  SELECT COUNT(*) AS registros
+  FROM base_cancer;
+  "
+)
+
+dbGetQuery(
+  con,
+  "
+  SELECT COUNT(DISTINCT AP) AS areas_programaticas
+  FROM base_cancer;
+  "
+)
+
+dbGetQuery(
+  con,
+  "
+  SELECT MIN(Año) AS anio_inicial,
+         MAX(Año) AS anio_final
+  FROM base_cancer;
+  "
+)
+
+dbGetQuery(
+  con,
+  "
+  SELECT COUNT(*) AS establecimientos
+  FROM establecimientos;
+  "
+)
+
+
+# ------------------------------------------------------------
+# 9. Cerrar conexión
+# ------------------------------------------------------------
+
+dbDisconnect(con)
+```
+
+### ####Conexión y ejecución de consultas SQLite
+
+Una vez creada la base SQLite, preprarmos un nuevo script de R, para conectarnos al archivo `cancer_mama_neuquen.sqlite` y consultar directamente las tablas almacenadas. Como primera verificación listamos las tablas disponibles e hicimos consultas simples sobre `base_cancer`: visualización de los primeros registros, cantidad total de observaciones, Áreas Programáticas existentes y número de registros por año.
+
+Luego creamos la función `ejecutar_sql()`, destinada a leer consultas guardadas en archivos `.sql` y ejecutarlas sobre la conexión activa. Esto ayuda a separar las consultas SQL del código de R y mantenerlas organizadas en la carpeta `sql/`, pudiendo reutilizarlas desde R sin escribir nuevamente cada consulta.
+
+```{r}
+
+
+library(DBI)
+library(RSQLite)
+
+archivo_sqlite <- "datos/procesados/cancer_mama_neuquen.sqlite"
+
+con <- dbConnect(
+  SQLite(),
+  archivo_sqlite
+)
+
+# Ver tablas disponibles
+dbListTables(con)
+
+dbGetQuery(
+  con,
+  "
+  SELECT *
+  FROM base_cancer
+  LIMIT 10;
+  "
+)
+
+dbGetQuery(
+  con,
+  "
+  SELECT COUNT(*) AS total_registros
+  FROM base_cancer;
+  "
+)
+
+dbGetQuery(
+  con,
+  "
+  SELECT DISTINCT AP
+  FROM base_cancer
+  ORDER BY AP;
+  "
+)
+
+dbGetQuery(
+  con,
+  "
+  SELECT
+      Año,
+      COUNT(*) AS registros
+  FROM base_cancer
+  GROUP BY Año
+  ORDER BY Año;
+  "
+)
+
+# ------------------------------------------------------------
+# Función para ejecutar archivos SQL
+# ------------------------------------------------------------
+
+ejecutar_sql <- function(archivo) {
+  
+  consulta <- paste(
+    readLines(
+      archivo,
+      encoding = "UTF-8"
+    ),
+    collapse = "\n"
+  )
+  
+  dbGetQuery(
+    con,
+    consulta
+  )
+}
+
+```
+
+### ####Exploración de datos mediante SQLite
+
+Una vez establecida la conexión con SQLite, realizamos consultas para continuar explorando la estructura de la base. En primer lugar miramos la cantidad de Áreas Programáticas correspondientes a cada Zona Sanitaria.
+
+```{r}
+library(DBI)
+library(RSQLite)
+
+archivo_sqlite <- "datos/procesados/cancer_mama_neuquen.sqlite"
+
+con <- dbConnect(
+  SQLite(),
+  archivo_sqlite
+)
+```
+
+```{sql connection=con}
+SELECT
+    ZS,
+    COUNT(DISTINCT AP) AS cantidad_ap
+FROM base_cancer
+GROUP BY ZS
+ORDER BY ZS;
+
+
+
+```
+
+A continuación relacionamos la base estadística con el resumen de establecimientos de salud mediante un `LEFT JOIN`. De este modo obtuvimos, para cada Área Programática, la TME promedio del período junto con la cantidad de establecimientos asociados.
+
+```{sql connection=con}
+SELECT
+    b.ZS,
+    b.AP,
+    ROUND(AVG(b.TME), 3) AS tme_promedio,
+    e.n AS establecimientos
+FROM base_cancer AS b
+LEFT JOIN establecimientos_por_ap AS e
+    ON b.AP = e.AP
+GROUP BY
+    b.ZS,
+    b.AP,
+    e.n
+ORDER BY
+    b.ZS,
+    tme_promedio DESC;
+    
+```
+
+A continuación realizamos una primera exploración descriptiva de la variable **TME**, calculando la cantidad de observaciones, sus valores mínimo, medio y máximo, y la cantidad de registros con TME igual a cero. Este último control nos permite comenzar a evaluar la frecuencia de valores nulos en la variable.
+
+```{sql connection=con}
+SELECT
+    COUNT(*) AS n,
+    ROUND(MIN(TME), 3) AS minimo,
+    ROUND(AVG(TME), 3) AS media,
+    ROUND(MAX(TME), 3) AS maximo,
+    SUM(CASE WHEN TME = 0 THEN 1 ELSE 0 END) AS cantidad_ceros
+FROM base_cancer;
+```
+
+Luego se desagregó esta exploración por año, calculando para cada período la cantidad de observaciones, los valores mínimo, medio y máximo de TME y la cantidad y proporción de registros con TME igual a cero. Esto permitió observar si la distribución de la variable y la presencia de ceros variaban a lo largo del período 2010–2017.
+
+```{sql connection=con}
+SELECT
+    Año,
+    COUNT(*) AS n,
+    ROUND(MIN(TME), 3) AS minimo,
+    ROUND(AVG(TME), 3) AS media,
+    ROUND(MAX(TME), 3) AS maximo,
+    SUM(
+        CASE
+            WHEN TME = 0 THEN 1
+            ELSE 0
+        END
+    ) AS cantidad_ceros,
+    ROUND(
+        100.0 *
+        SUM(
+            CASE
+                WHEN TME = 0 THEN 1
+                ELSE 0
+            END
+        ) / COUNT(*),
+        1
+    ) AS porcentaje_ceros
+FROM base_cancer
+GROUP BY Año
+ORDER BY Año;
+```
+
+Luego destacamos los valores más elevados de **TME** registrados en la base, indicando el año, la Zona Sanitaria y el Área Programática correspondiente. Para ello ordenamos los registros de mayor a menor TME y se seleccionaron los 20 valores más altos.
+
+```{sql connection=con}
+SELECT
+    Año,
+    ZS,
+    AP,
+    ROUND(TME, 3) AS TME
+FROM base_cancer
+ORDER BY TME DESC
+LIMIT 20;
+
+```
+
+Finalmente, resumimos el comportamiento de la **TME por Área Programática** a lo largo del período completo. Para cada AP calculamos la cantidad de años observados, la TME media, mínima y máxima, y se contabilizaron los años con TME igual a cero y aquellos con valores positivos. Esto nos permitió comparar la persistencia y variabilidad de la mortalidad entre las distintas Áreas Programáticas.
+
+```{sql connection=con}
+SELECT
+    ZS,
+    AP,
+    COUNT(*) AS años_observados,
+    ROUND(AVG(TME), 3) AS tme_media,
+    ROUND(MIN(TME), 3) AS tme_minima,
+    ROUND(MAX(TME), 3) AS tme_maxima,
+
+    SUM(
+        CASE
+            WHEN TME = 0 THEN 1
+            ELSE 0
+        END
+    ) AS años_con_cero,
+
+    SUM(
+        CASE
+            WHEN TME > 0 THEN 1
+            ELSE 0
+        END
+    ) AS años_con_tme_positiva
+
+FROM base_cancer
+GROUP BY
+    ZS,
+    AP
+ORDER BY
+    tme_media DESC;
+```
+
+### ####Construcción de la Información espacial
+
+A continuación nos proponemos construir un **mapa interactivo público** que permita visualizar espacialmente la información analizada. Para ello es necesario disponer no solo de los límites provinciales y departamentales y establecimiento sanitarios (información descargada inicialmente de los sitios oficiales mencionados al inicio de este proyecto), sino también de los polígonos correspondientes a las **Zonas Sanitarias y Áreas Programáticas (AP)**, ya que estas últimas constituyen la unidad territorial en la que se encuentran organizados los datos del estudio.
+
+Actualmente, las capas correspondientes a estas divisiones sanitarias no se encuentran disponibles en las fuentes oficiales consultadas para el período **2010–2017**; las cartografías accesibles corresponden a períodos posteriores y, por lo tanto, no pueden utilizarse directamente para representar la organización territorial vigente durante los años analizados.
+
+```{r}
+nrow(establecimientos_limpios)
+nrow(neuquen_departamentos_limpios)
+nrow(neuquen_provincia_limpia)
+
+st_crs(establecimientos_limpios)
+```
+
+Por este motivo, la siguiente etapa consiste en **localizar, reconstruir y validar las delimitaciones territoriales correspondientes al período de estudio**, para posteriormente vincular los polígonos de las AP con la base estadística mediante las claves territoriales ya normalizadas. A partir de esta vinculación será posible avanzar hacia la representación cartográfica de los indicadores y el análisis exploratorio espacial.
+
+### ###Relación entre Áreas Programáticas y Zonas Sanitarias
+
+La base estadística contiene la correspondencia entre cada Área Programática y su Zona Sanitaria. Esta relación podrá utilizarse posteriormente para incorporar la Zona Sanitaria a los polígonos de AP y, eventualmente, construir una capa de Zonas Sanitarias mediante la agregación de sus Áreas Programáticas.
+
+```{r}
+relacion_ap_zs <- base_limpia |>
+  distinct(ZS, AP) |>
+  arrange(ZS, AP)
+
+relacion_ap_zs
+
+relacion_ap_zs |>
+  count(ZS)
+
+write.csv(
+  relacion_ap_zs,
+  "datos/procesados/relacion_ap_zs.csv",
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+```
+
+Hemos conseguido una capa base que supuestamente contiene las AP del momento de la investigación de modo que la exploramos para analizar la información y verificar los datos:
+
+```{r}
+
+ap_prueba <- st_read(
+  "datos/originales/ap_hosp_prov2.shp",
+  quiet = TRUE
+)
+
+ap_prueba
+```
+
+###Realizamos los controles de la capa:
+
+```{r}
+# Cantidad de polígonos
+nrow(ap_prueba)
+
+# Variables disponibles
+names(ap_prueba)
+
+# Tipo de geometría
+table(st_geometry_type(ap_prueba))
+
+# Sistema de coordenadas
+st_crs(ap_prueba)
+
+# Geometrías válidas
+table(st_is_valid(ap_prueba))
+
+# Geometrías vacías
+sum(st_is_empty(ap_prueba))
+
+# Extensión espacial
+st_bbox(ap_prueba)
+
+# Tabla de atributos
+ap_prueba |>
+  st_drop_geometry() |>
+  glimpse()
+```
+
+```{r}
+#| include: false
+
+source("R/01_importacion.R")
+source("R/02_limpieza_AP.R")
+```
+
+####Validación de la correspondencia con la base estadística
+
+La nueva capa contiene una variable denominada `ID_EFECTOR`, que puede compararse con `id_efector` de la base estadística original. Elegimos utilizar este identificador para la vinculación en lugar de los nombres de las Áreas Programáticas, dado que estos presentan diferencias de escritura y denominación entre ambas fuentes.
+
+La comparación fue para verificar la correspondencia entre los identificadores de los 28 polígonos de la capa y las 28 Áreas Programáticas de la base estadística. Esta vinculación tiene el objetivo de incorporar a cada polígono tanto el nombre normalizado del Área Programática (`AP`) como su correspondiente Zona Sanitaria (`ZS`), manteniendo a su vez los atributos originales de la capa espacial.
+
+```{r, include=FALSE}
+
+
+source("R/01_importacion.R")
+source("R/02_limpieza_AP.R")
+source("R/03_controles.R")
+
+
+
+```
+
+####Preparando identificadores para el join
+
+Antes de verificar la correspondencia entre ambas fuentes, construimos dos tablas auxiliares. En la primera conservamos los identificadores de efector, la Zona Sanitaria y el Área Programática presentes en la base estadística; en la segunda extraemos de la capa espacial el identificador de efector y el nombre del Área Programática.
+
+Esta preparación permite comparar ambas fuentes utilizando `id_efector` como clave común, evitando que las diferencias en la escritura de los nombres de las AP interfieran en la validación.
+
+```{r}
+efectores_base <- base_limpia |>
+  distinct(id_efector, ZS, AP) |>
+  arrange(id_efector)
+
+efectores_capa <- ap_prueba |>
+  st_drop_geometry() |>
+  transmute(
+    id_efector = as.integer(ID_EFECTOR),
+    ap_capa = ap.hosp
+  ) |>
+  arrange(id_efector)
+```
+
+A continuación verificamos si existen identificadores presentes en una fuente que no tengan correspondencia en la otra
+
+```{r}
+# ID presentes en la base pero no en la capa
+anti_join(
+  efectores_base,
+  efectores_capa,
+  by = "id_efector"
+)
+
+# ID presentes en la capa pero no en la base
+anti_join(
+  efectores_capa,
+  efectores_base,
+  by = "id_efector"
+)
+```
+
+###Vinculación de los polígonos con la información territorial
+
+Una vez verificada la correspondencia completa de los identificadores entre ambas fuentes, incorporamos a la capa espacial el nombre normalizado del Área Programática y su correspondiente Zona Sanitaria. Para ello utilizamos `id_efector` como clave de unión.
+
+```{r}
+ap_historica_validada <- ap_prueba |>
+  mutate(
+    id_efector = as.integer(ID_EFECTOR)
+  ) |>
+  left_join(
+    efectores_base,
+    by = "id_efector"
+  )
+```
+
+y controlamos:
+
+```{r}
+nrow(ap_historica_validada)
+
+n_distinct(ap_historica_validada$AP)
+
+n_distinct(ap_historica_validada$ZS)
+
+sum(is.na(ap_historica_validada$AP))
+
+sum(is.na(ap_historica_validada$ZS))
+```
+
+###Creación de base espacial longitudinal
+
+```{r}
+datos_anuales <- base_limpia |>
+  select(
+    id_efector,
+    Año,
+    TME,
+    IE,
+    IDE,
+    TN,
+    M,
+    E,
+    O,
+    G,
+    C
+  )
+
+ap_tiempo <- ap_historica_validada |>
+  left_join(
+    datos_anuales,
+    by = "id_efector"
+  )
+
+
+nrow(ap_tiempo)
+
+n_distinct(ap_tiempo$AP)
+
+sort(unique(ap_tiempo$Año))
+
+ap_tiempo |>
+  st_drop_geometry() |>
+  count(Año)
+
+sum(is.na(ap_tiempo$TME))
+
+ap_tiempo |>
+  st_drop_geometry() |>
+  count(AP, Año) |>
+  filter(n != 1)
+```
+
+Los controles confirman que no hay combinaciones AP-año duplicadas ni faltantes
+
+###Decisiones metodológicas antes de colorear el mapa
+
+Para construir la visualización temporal se utilizará la base espacial longitudinal obtenida anteriormente. El mapa permitirá comparar las 28 Áreas Programáticas durante el período 2010–2017, utilizando una misma clasificación de la TME para todos los años.
+
+####Una cuestión de visualización
+
+La TME presenta una importante cantidad de valores iguales a cero y algunos valores considerablemente mayores que el resto. Por este motivo, antes de definir la escala de colores del mapa se analizará su distribución, buscando una clasificación que permita representar adecuadamente la variabilidad de los datos.
+
+Además, se utilizará **una misma escala de referencia para todos los años**, de manera que un mismo color represente valores comparables de TME durante todo el período 2010–2017.
+
+####Exploración de la TME para elegir la escala del mapa
+
+Dado que la TME presenta una elevada proporción de ceros y algunos valores considerablemente mayores que el resto, exploramos su distribución en todo el período. Esta información permitirá decidir posteriormente si resulta conveniente utilizar intervalos regulares, cuantiles u otro criterio de clasificación para la representación cartográfica.
+
+```{r}
+summary(ap_tiempo$TME)
+
+quantile(
+  ap_tiempo$TME,
+  probs = c(0, 0.25, 0.50, 0.75, 0.90, 0.95, 1)
+)
+
+ap_tiempo |>
+  st_drop_geometry() |>
+  summarise(
+    n = n(),
+    ceros = sum(TME == 0),
+    porcentaje_ceros = round(mean(TME == 0) * 100, 1),
+    minimo = min(TME),
+    mediana = median(TME),
+    media = mean(TME),
+    maximo = max(TME)
+  )
+```
+
+para los valores positivos:
+
+```{r}
+ap_tiempo |>
+  st_drop_geometry() |>
+  filter(TME > 0) |>
+  summarise(
+    n_positivos = n(),
+    minimo = min(TME),
+    q25 = quantile(TME, 0.25),
+    mediana = median(TME),
+    q75 = quantile(TME, 0.75),
+    q90 = quantile(TME, 0.90),
+    maximo = max(TME)
+  )
+```
+
+Esto confirma que **no conviene formar cuantiles con los 224 valores juntos**, porque el percentil 25 y la mediana son ambos 0. Tendríamos varios puntos de corte iguales.
+
+Es decir, la exploración mostró que el 55,8 % de las observaciones presenta TME igual a cero. Por este motivo, no resulta conveniente construir la clasificación directamente mediante cuantiles de toda la distribución, ya que los primeros cuantiles coinciden en cero.
+
+Decidimos considerar el valor cero como una categoría específica y establecer los restantes intervalos a partir de la distribución de las TME positivas. Los mismos puntos de corte se mantendrán para todos los años, permitiendo realizar comparaciones temporales con una escala común.
+
+```{r}
+ap_tiempo <- ap_tiempo |>
+  mutate(
+    clase_tme = case_when(
+      TME == 0 ~ "0",
+      TME <= 1.798333 ~ "> 0 a 1.80",
+      TME <= 2.667014 ~ "> 1.80 a 2.67",
+      TME <= 3.927875 ~ "> 2.67 a 3.93",
+      TME <= 7.012044 ~ "> 3.93 a 7.01",
+      TME > 7.012044 ~ "> 7.01"
+    ),
+    clase_tme = factor(
+      clase_tme,
+      levels = c(
+        "0",
+        "> 0 a 1.80",
+        "> 1.80 a 2.67",
+        "> 2.67 a 3.93",
+        "> 3.93 a 7.01",
+        "> 7.01"
+      )
+    )
+  )
+
+names(ap_tiempo)
+```
+
+Una vez definidos los puntos de corte a partir de la distribución de las TME positivas, representamos la cantidad de observaciones comprendidas en cada intervalo. Esta visualización permite observar cómo queda distribuida la información con la clasificación propuesta y verificar que las categorías resultantes sean adecuadas para la representación cartográfica.
+
+```{r}
+
+
+library(ggplot2)
+
+ap_tiempo |>
+  st_drop_geometry() |>
+  count(clase_tme) |>
+  ggplot(aes(x = clase_tme, y = n)) +
+  geom_col() +
+  labs(
+    title = "Cantidad de observaciones por clase de TME",
+    x = "Clase de TME",
+    y = "Frecuencia"
+  )
+```
+
+###Construcción del mapa con leaflet
+
+El mapa interactivo se desarrollará con `leaflet`. En una primera etapa se construirá y validará el mapa correspondiente a un solo año (2010) y, posteriormente, se extenderá la visualización al período completo, manteniendo criterios comunes que permitan comparar los años entre sí.
+
+```{r}  library(leaflet)  mapa_2010 <- ap_tiempo |>   filter(Año == 2010) |>   st_transform(4326)}
+```
+
+El paquete `leaflet`, nos permite superponer los polígonos de las Áreas Programáticas sobre un mapa base de OpenStreetMap e incorporar elementos interactivos como etiquetas, ventanas emergentes y controles de navegación.
+
+Dado que la bitácora principal se genera en formato PDF y los mapas de `leaflet` requieren un entorno HTML, decidimos construir el producto cartográfico interactivo en un documento Quarto independiente. La bitácora continuará registrando las decisiones, transformaciones y controles realizados durante su construcción.
+
+Además, para independizar la construcción del mapa de las etapas anteriores de limpieza, guardamos la base espacial longitudinal obtenida como una nueva capa del GeoPackage procesado del proyecto. De esta manera, el documento destinado al mapa podrá leer directamente la información espacial ya validada.
+
+Para evitar conflictos de escritura sobre el GeoPackage previamente utilizado en el proyecto, se decidió guardar la capa espacial longitudinal destinada a la visualización en un archivo independiente.
+
+```{r}
+archivo_mapa <- "datos/procesados/ap_tiempo_mapa.gpkg"
+
+st_write(
+  ap_tiempo_exportar,
+  archivo_mapa,
+  layer = "ap_tiempo",
+  delete_dsn = TRUE,
+  quiet = TRUE
+)
+
+
+
+```
+
+Finalmente se verificó la correcta creación del archivo `ap_tiempo_mapa.gpkg`, comprobando que la capa `ap_tiempo` conserva los 224 registros correspondientes a las 28 Áreas Programáticas observadas durante los ocho años del período 2010–2017.
+
+```{r}
+ap_tiempo_control <- st_read(
+  "datos/procesados/ap_tiempo_mapa.gpkg",
+  layer = "ap_tiempo",
+  quiet = TRUE
+)
+
+nrow(ap_tiempo_control)
+```
