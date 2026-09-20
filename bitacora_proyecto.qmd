@@ -1137,7 +1137,11 @@ ap_tiempo |>
 
 El mapa interactivo se desarrollará con `leaflet`. En una primera etapa se construirá y validará el mapa correspondiente a un solo año (2010) y, posteriormente, se extenderá la visualización al período completo, manteniendo criterios comunes que permitan comparar los años entre sí.
 
-```{r}  library(leaflet)  mapa_2010 <- ap_tiempo |>   filter(Año == 2010) |>   st_transform(4326)}
+```{r}
+library(leaflet)
+
+mapa_2010 <- ap_tiempo |>
+  filter(Año == 2010) |>   st_transform(4326)
 ```
 
 El paquete `leaflet`, nos permite superponer los polígonos de las Áreas Programáticas sobre un mapa base de OpenStreetMap e incorporar elementos interactivos como etiquetas, ventanas emergentes y controles de navegación.
@@ -1146,24 +1150,7 @@ Dado que la bitácora principal se genera en formato PDF y los mapas de `leaflet
 
 Además, para independizar la construcción del mapa de las etapas anteriores de limpieza, guardamos la base espacial longitudinal obtenida como una nueva capa del GeoPackage procesado del proyecto. De esta manera, el documento destinado al mapa podrá leer directamente la información espacial ya validada.
 
-Para evitar conflictos de escritura sobre el GeoPackage previamente utilizado en el proyecto, se decidió guardar la capa espacial longitudinal destinada a la visualización en un archivo independiente.
-
-```{r}
-archivo_mapa <- "datos/procesados/ap_tiempo_mapa.gpkg"
-
-st_write(
-  ap_tiempo_exportar,
-  archivo_mapa,
-  layer = "ap_tiempo",
-  delete_dsn = TRUE,
-  quiet = TRUE
-)
-
-
-
-```
-
-Finalmente se verificó la correcta creación del archivo `ap_tiempo_mapa.gpkg`, comprobando que la capa `ap_tiempo` conserva los 224 registros correspondientes a las 28 Áreas Programáticas observadas durante los ocho años del período 2010–2017.
+Verificamos creación del archivo `ap_tiempo_mapa.gpkg`, comprobando que la capa `ap_tiempo` conserva los 224 registros correspondientes a las 28 Áreas Programáticas observadas durante los ocho años del período 2010–2017.
 
 ```{r}
 ap_tiempo_control <- st_read(
@@ -1173,4 +1160,292 @@ ap_tiempo_control <- st_read(
 )
 
 nrow(ap_tiempo_control)
+```
+
+Para construir la visualización interactiva se creó un documento Quarto independiente en formato HTML, utilizando `leaflet` y OpenStreetMap como cartografía base. Se leyó la capa espacial longitudinal previamente guardada y se recuperó el orden de las categorías de TME definidas durante el análisis exploratorio. Como primera prueba se seleccionaron las 28 Áreas Programáticas correspondientes al año 2010 y se transformó la capa a EPSG:4326 para su visualización web. La clasificación y los colores se definieron tomando como referencia el período completo 2010–2017, con el objetivo de mantener posteriormente una escala comparable entre años.
+
+##falta imagen del mapa
+
+Una vez validada la representación correspondiente a 2010, se extendió el mapa al período completo 2010–2017. Para ello, las observaciones se organizaron en ocho grupos, uno por año, manteniendo los mismos polígonos de Áreas Programáticas y una única clasificación de TME para todo el período. Se incorporó un selector que permite visualizar alternativamente cada año, evitando la superposición de polígonos. El valor TME = 0 se representó mediante un color neutro y los valores positivos mediante una escala secuencial de intensidad creciente.
+
+###DISTRIBUCIÓN TERRITORIAL DE LA DENSIDAD MÉDICA \# Y ESTABLECIMIENTOS DE SALUD
+
+```{r}
+# ============================================================
+# DISTRIBUCIÓN TERRITORIAL DE LA DENSIDAD MÉDICA
+# Y ESTABLECIMIENTOS DE SALUD
+
+
+# la idea es hacer un mapa con la densidad médica media del período============================================================
+
+library(sf)
+library(dplyr)
+library(ggplot2)
+
+# ------------------------------------------------------------
+# 1. Densidad médica promedio 2010-2017 por AP
+# ------------------------------------------------------------
+
+m_promedio_ap <- ap_tiempo |>
+  st_drop_geometry() |>
+  group_by(id_efector) |>
+  summarise(
+    M_promedio = mean(M, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+m_promedio_ap
+```
+
+```{r}
+# ------------------------------------------------------------
+# 2. Vincular el promedio de M con los polígonos históricos
+# ------------------------------------------------------------
+
+ap_m <- ap_historica_validada |>
+  left_join(
+    m_promedio_ap,
+    by = "id_efector"
+  )
+
+# Controles
+nrow(ap_m)
+n_distinct(ap_m$AP)
+sum(is.na(ap_m$M_promedio))
+```
+
+```{r}
+# ------------------------------------------------------------
+# 3. Homogeneizar CRS de los establecimientos
+# ------------------------------------------------------------
+
+establecimientos_mapa <- establecimientos_limpios |>
+  st_transform(st_crs(ap_m))
+
+# Controles
+nrow(establecimientos_mapa)
+st_crs(establecimientos_mapa) == st_crs(ap_m)
+```
+
+###revisamos los cálculos
+
+### Revisamos los cálculos de densidad médica
+
+Antes de avanzar con la representación espacial de los indicadores sanitarios, revisamos el tratamiento de la variable `M`, correspondiente a la **densidad de médicas/os por cada 10.000 habitantes**.
+
+La base contiene una observación para cada combinación de Área Programática y año durante el período 2010–2017. Por lo tanto, la densidad médica no representa un valor fijo para cada Área Programática, sino que puede variar de un año a otro. Cada registro anual cuenta la cantidad de médicas/os por cada 10.000 habitantes correspondiente a esa AP y a ese año.
+
+Para construir una representación espacial sintética del período completo, decidimos calcular para cada Área Programática el **promedio de sus ocho densidades médicas anuales**:
+
+$$\overline{M}_{AP}
+=
+\frac{
+M_{2010}+M_{2011}+M_{2012}+M_{2013}
++M_{2014}+M_{2015}+M_{2016}+M_{2017}
+}{8}$$
+
+De este modo, el valor representado en el mapa no corresponde a un año particular, sino a la **densidad médica anual promedio observada en cada Área Programática durante 2010–2017**.
+
+Esto no equivale a recalcular una densidad global para todo el período. Para realizar ese cálculo sería necesario, para cada año, contar con los valores absolutos de médicas/os y de la población utilizada como denominador. En este caso trabajamos con las densidades anuales presentes en la base y calculamos su media aritmética, dando el mismo peso a cada uno de los ocho años.
+
+Antes de vincular este resumen con la capa espacial, realizamos controles para comprobar que cada Área Programática contara con las ocho observaciones anuales esperadas y para examinar la variación de `M` durante el período.
+
+```{r}
+# ============================================================
+# DENSIDAD MÉDICA PROMEDIO 2010-2017 POR ÁREA PROGRAMÁTICA
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Revisar primero la variación anual de M
+# ------------------------------------------------------------
+
+control_m <- ap_tiempo |>
+  st_drop_geometry() |>
+  select(
+    id_efector,
+    ZS,
+    AP,
+    Año,
+    M
+  ) |>
+  arrange(AP, Año)
+
+head(control_m)
+```
+
+```{r}
+# ------------------------------------------------------------
+# 2. Control de los valores anuales por AP
+# ------------------------------------------------------------
+
+resumen_m_ap <- control_m |>
+  group_by(
+    id_efector,
+    ZS,
+    AP
+  ) |>
+  summarise(
+    n_anios = n_distinct(Año),
+    M_min = min(M, na.rm = TRUE),
+    M_max = max(M, na.rm = TRUE),
+    M_promedio = mean(M, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+resumen_m_ap
+```
+
+```{r}
+unique(resumen_m_ap$n_anios)
+```
+
+```{r}
+# ------------------------------------------------------------
+# 3. Densidad médica media del período por AP
+# ------------------------------------------------------------
+
+m_promedio_ap <- control_m |>
+  group_by(
+    id_efector,
+    ZS,
+    AP
+  ) |>
+  summarise(
+    M_promedio = mean(M, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+head(m_promedio_ap)
+```
+
+```{r}
+ap_m <- ap_historica_validada |>
+  left_join(
+    m_promedio_ap |>
+      select(id_efector, M_promedio),
+    by = "id_efector"
+  )
+
+# ------------------------------------------------------------
+# Validación de los datos utilizados para el promedio
+# ------------------------------------------------------------
+
+validacion_m <- resumen_m_ap |>
+  summarise(
+    areas_programaticas = n(),
+    minimo_anios_por_ap = min(n_anios),
+    maximo_anios_por_ap = max(n_anios),
+    ap_con_8_anios = sum(n_anios == 8),
+    faltantes_promedio_M = sum(is.na(M_promedio))
+  )
+
+validacion_m
+```
+
+###resumen
+
+```{r}
+resumen_m_ap |>
+  select(
+    ZS,
+    AP,
+    n_anios,
+    M_min,
+    M_max,
+    M_promedio
+  ) |>
+  arrange(desc(M_promedio)) |>
+  mutate(
+    M_min = round(M_min, 2),
+    M_max = round(M_max, 2),
+    M_promedio = round(M_promedio, 2)
+  ) |>
+  knitr::kable(
+    col.names = c(
+      "ZS",
+      "Área Programática",
+      "Años",
+      "M mínima",
+      "M máxima",
+      "M promedio"
+    ),
+    caption = "Densidad médica por Área Programática, 2010–2017"
+  )
+```
+
+Los controles realizados mostraron que las 28 Áreas Programáticas cuentan con las ocho observaciones anuales correspondientes al período 2010--2017 y que no existen valores faltantes en la densidad médica promedio calculada.
+
+Por lo tanto, el promedio de `M` fue obtenido a partir del mismo número de observaciones para todas las Áreas Programáticas, lo que nos permite comparar descriptivamente la densidad médica anual promedio entre los distintos territorios.
+
+Además, los valores mínimo y máximo observados dentro de cada Área Programática permiten comprobar que la densidad médica presentó variaciones interanuales. Por esto, el valor utilizado posteriormente en el mapa es interpretable como una síntesis del período y no como una densidad constante entre 2010 y 2017.
+
+```{r}
+mapa_m_establecimientos <- ggplot() +
+  
+  geom_sf(
+    data = ap_m,
+    aes(fill = M_promedio),
+    color = "white",
+    linewidth = 0.25
+  ) +
+  
+  geom_sf(
+    data = establecimientos_mapa,
+    color = "#B22222",
+    size = 0.70,
+    alpha = 0.75
+  ) +
+  
+  scale_fill_viridis_c(
+    name = "Médicas/os\npor 10.000 hab."
+  ) +
+  
+  labs(
+    title = "Densidad médica y establecimientos de salud",
+    subtitle = "Promedio 2010–2017 por Área Programática",
+    caption = "Fuente: elaboración propia a partir de la base del proyecto e información espacial oficial."
+  ) +
+  
+  theme_void(base_size = 11) +
+  
+  theme(
+    plot.title = element_text(
+      face = "bold",
+      size = 13,
+      hjust = 0.5,
+      margin = margin(b = 4)
+    ),
+    
+    plot.subtitle = element_text(
+      size = 10,
+      hjust = 0.5,
+      margin = margin(b = 8)
+    ),
+    
+    plot.caption = element_text(
+      size = 7,
+      hjust = 0,
+      margin = margin(t = 8)
+    ),
+    
+    legend.title = element_text(
+      size = 10,
+      face = "bold"
+    ),
+    
+    legend.text = element_text(
+      size = 9
+    ),
+    
+    legend.position = "right",
+    
+    plot.margin = margin(
+      t = 15,
+      r = 15,
+      b = 20,
+      l = 15
+    )
+  )
+
+mapa_m_establecimientos
 ```
