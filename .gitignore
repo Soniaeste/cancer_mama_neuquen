@@ -12,7 +12,7 @@
 
 Mapas_cancer_mama.html
 Mapas_cancer_mama_files/
-bitacora_proyecto.html
+#bitacora_proyecto.html
 bitacora_proyecto_files/
 
 datos/originales/
@@ -23,3 +23,5 @@ datos/procesados/
 *.rar
 
 ap_hosp_prov2/
+
+**/*.quarto_ipynb
