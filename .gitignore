@@ -3,17 +3,14 @@
 .RData
 .Ruserdata
 
-.Rproj.user
-.Rhistory
-.RData
-.Ruserdata
-
 /.quarto/
 
 Mapas_cancer_mama.html
 Mapas_cancer_mama_files/
+
+# La bitácora HTML y sus recursos se publican en GitHub Pages
 #bitacora_proyecto.html
-bitacora_proyecto_files/
+#bitacora_proyecto_files/
 
 datos/originales/
 datos/procesados/
