@@ -1449,3 +1449,119 @@ mapa_m_establecimientos <- ggplot() +
 
 mapa_m_establecimientos
 ```
+
+##perfil sanitario/mapa de calor
+
+```{r}
+# ============================================================
+# PERFIL SANITARIO POR ZONA SANITARIA
+# ============================================================
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# ------------------------------------------------------------
+# 1. Resumen de los indicadores sanitarios por Zona Sanitaria
+# ------------------------------------------------------------
+
+perfil_sanitario_zs <- ap_tiempo |>
+  st_drop_geometry() |>
+  group_by(ZS) |>
+  summarise(
+    M = mean(M, na.rm = TRUE),
+    E = mean(E, na.rm = TRUE),
+    O = mean(O, na.rm = TRUE),
+    G = mean(G, na.rm = TRUE),
+    C = mean(C, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+perfil_sanitario_zs
+```
+
+```{r}
+# ------------------------------------------------------------
+# 2. Pasar a formato largo y estandarizar cada indicador
+# ------------------------------------------------------------
+
+perfil_sanitario_long <- perfil_sanitario_zs |>
+  pivot_longer(
+    cols = c(M, E, O, G, C),
+    names_to = "Indicador",
+    values_to = "Valor"
+  ) |>
+  group_by(Indicador) |>
+  mutate(
+    z = as.numeric(scale(Valor))
+  ) |>
+  ungroup() |>
+  mutate(
+    Indicador = recode(
+      Indicador,
+      M = "Densidad de médicas/os",
+      E = "Densidad de enfermeras/os",
+      O = "Camas ocupadas",
+      G = "Atención por guardia",
+      C = "Consultas por habitante"
+    )
+  )
+
+perfil_sanitario_long
+```
+
+```{r}
+# ------------------------------------------------------------
+# 3. Mapa de calor
+# ------------------------------------------------------------
+
+heatmap_sanitario <- ggplot(
+  perfil_sanitario_long,
+  aes(x = Indicador, y = ZS, fill = z)
+) +
+  geom_tile(
+    color = "white",
+    linewidth = 0.5
+  ) +
+  geom_text(
+    aes(label = round(Valor, 1)),
+    size = 3.1
+  ) +
+  scale_fill_gradient2(
+    low = "#2166AC",
+    mid = "white",
+    high = "#B2182B",
+    midpoint = 0,
+    name = "Valor\nestandarizado"
+  ) +
+  labs(
+    title = "Perfil sanitario por Zona Sanitaria",
+    subtitle = "Promedios del período 2010–2017",
+    x = NULL,
+    y = "Zona Sanitaria"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(
+      face = "bold",
+      size = 14,
+      hjust = 0.5
+    ),
+    plot.subtitle = element_text(
+      size = 10,
+      hjust = 0.5
+    ),
+    axis.text.x = element_text(
+      angle = 20,
+      hjust = 1,
+      size = 9
+    ),
+    axis.text.y = element_text(
+      size = 10
+    ),
+    panel.grid = element_blank(),
+    legend.position = "right"
+  )
+
+heatmap_sanitario
+```
